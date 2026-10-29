@@ -443,6 +443,12 @@ async function fetchAndRespond(
       res.set('content-type', 'text/html')
     }
     res.status(response.status)
+    // Bee is asked with GET for a HEAD too, so its body is let go here rather than read whole and thrown away.
+    if (res.req.method === 'HEAD') {
+      await response.body?.cancel()
+      res.end()
+      return
+    }
     if (head.byteLength) {
       res.write(head)
     }
