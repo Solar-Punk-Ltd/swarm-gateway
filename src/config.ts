@@ -117,6 +117,20 @@ export function getAppConfig(env: EnvironmentVariables): AppConfig {
   }
 }
 
+const REDACTED = '[redacted]'
+const SECRET_APP_CONFIG_KEYS = ['authorization', 'moderationSecret', 'mattermostWebhookUrl', 'ensRpcUrl'] as const
+
+/** The app config with its secrets, and the URLs that can carry an API key or a token, hidden for a log line. */
+export function redactAppConfig(config: AppConfig): AppConfig {
+  const logged = { ...config }
+  for (const key of SECRET_APP_CONFIG_KEYS) {
+    if (logged[key]) {
+      logged[key] = REDACTED
+    }
+  }
+  return logged
+}
+
 /** A space- or comma-separated list of ENS names, lowercased. Empty when unset. */
 export function parseEnsNames(value: string | undefined): string[] {
   return (value ?? '')

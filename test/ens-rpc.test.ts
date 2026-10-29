@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import http, { Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test'
-import { AppConfig, getAppConfig, getNamesWithoutEth } from '../src/config'
+import { AppConfig, getAppConfig, getNamesWithoutEth, redactAppConfig } from '../src/config'
 import * as Database from '../src/database/Database'
 import { createApp } from '../src/server'
 import * as Feed from '../src/services/feed'
@@ -160,6 +160,24 @@ describe('ENS_RPC_URL setting', () => {
   it('is read from the environment', () => {
     assert.equal(getAppConfig({ ENS_RPC_URL: 'https://rpc.example.com' }).ensRpcUrl, 'https://rpc.example.com')
     assert.equal(getAppConfig({}).ensRpcUrl, '')
+  })
+})
+
+describe('the app config as it is logged', () => {
+  it('hides the secrets and the urls that can carry a key, and keeps the rest', () => {
+    const config = getAppConfig({
+      AUTH_SECRET: 'auth-value',
+      MODERATION_SECRET: 'moderation-value',
+      MATTERMOST_WEBHOOK_URL: 'https://chat.example.com/hooks/value',
+      ENS_RPC_URL: 'https://rpc.example.com/v3/value',
+      HOSTNAME: 'gw.example.com',
+    })
+    const logged = redactAppConfig(config)
+    assert.ok(!JSON.stringify(logged).includes('value'), JSON.stringify(logged))
+    assert.equal(logged.hostname, 'gw.example.com')
+    assert.equal(logged.authorization, '[redacted]')
+    assert.equal(config.authorization, 'auth-value')
+    assert.equal(redactAppConfig(getAppConfig({})).ensRpcUrl, '')
   })
 })
 

@@ -7,6 +7,7 @@ import {
   getPostageBatchDispenserConfig,
   getServerConfig,
   getStampConfig,
+  redactAppConfig,
 } from './config'
 import { logger, subscribeLogServerRequests } from './logger'
 import { runMigrations } from './migration'
@@ -21,7 +22,7 @@ async function main() {
   const appConfig = getAppConfig(process.env as EnvironmentVariables)
   const serverConfig = getServerConfig(process.env as EnvironmentVariables)
 
-  logger.debug('proxy config', appConfig)
+  logger.debug('proxy config', redactAppConfig(appConfig))
   logger.debug('server config', serverConfig)
   logger.debug('stamp config', stampConfig)
 
