@@ -80,7 +80,7 @@ While it is set, the listed names on their subdomains are all the gateway serves
 request answers 404 before it reaches Bee or the RPC endpoint: paths on the main hostname such as
 `/bzz/<name>.eth/`, `/bzz/<hash>/`, `/bytes/<hash>`, `/chunks/<hash>` and `/feeds/...`, uploads, the
 stamp listings under `/batches`, the moderation API, the homepage and the static pages, on any Host,
-an IP address included, and every request to a listed subdomain other than GET. Four paths stay
+an IP address included, and every request to a listed subdomain other than GET and HEAD. Four paths stay
 reachable on any Host for the operator: `/health`, `/readiness`, `/metrics`, and `/tls-check`,
 which a certificate for a listed subdomain is issued through. When it is unset, every subdomain and
 every path is served as before.

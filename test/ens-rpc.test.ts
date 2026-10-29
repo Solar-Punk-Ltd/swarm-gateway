@@ -170,6 +170,11 @@ describe('ens names resolved by the gateway', () => {
     assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
   })
 
+  it('answers HEAD on an ens subdomain from the site, asking Bee with GET', async () => {
+    assert.equal((await request(port, '/', { host: 'site.gw.local' }, 'HEAD')).status, 200)
+    assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
+  })
+
   it('still treats the bare hash as a website', async () => {
     const response = await request(port, `/bzz/${SITE}/`)
     assert.equal(response.status, 302)
@@ -364,6 +369,11 @@ describe('serving only listed ens names, away from their subdomains', () => {
       beeRequests.every(x => x.startsWith(`GET /bzz/${SITE}/batches`)),
       beeRequests.join(', '),
     )
+  })
+
+  it('answers HEAD on a listed subdomain from the site', async () => {
+    assert.equal((await request(port, '/', { host: 'site.gw.local' }, 'HEAD')).status, 200)
+    assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
   })
 
   it('still serves a listed name on its subdomain', async () => {

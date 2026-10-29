@@ -130,9 +130,16 @@ export function addRuleHashes(hashes: string[], hash: string): string[] {
   return hashes
 }
 
-/** Whether a request asks for content on a subdomain of the gateway's hostname, which only GET may. */
+const SUBDOMAIN_METHODS = new Set(['GET', 'HEAD'])
+
+/**
+ * Whether a request asks for content on a subdomain of the gateway's hostname, which only GET and HEAD
+ * may. Bee is asked with GET for both, and Node sends no body in answer to a HEAD.
+ */
 export function isSubdomainRequest(req: Request, hostname: string | undefined): boolean {
-  return Boolean(hostname && req.hostname && Strings.before(req.hostname, hostname) && req.method === 'GET')
+  return Boolean(
+    hostname && req.hostname && Strings.before(req.hostname, hostname) && SUBDOMAIN_METHODS.has(req.method),
+  )
 }
 
 export function createProxyEndpoints(app: Application, options: ProxyOptions) {
