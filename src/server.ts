@@ -1,6 +1,7 @@
 import { Bee } from '@ethersphere/bee-js'
-import { Arrays, Numbers, Objects, Strings, Types } from 'cafe-utility'
+import { Arrays, Dates, Numbers, Objects, Strings, Types } from 'cafe-utility'
 import express, { Application, NextFunction, Request, Response } from 'express'
+import { Server } from 'http'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { EnsOptions, isServableSubdomain } from './bzz-link'
@@ -45,6 +46,19 @@ const OPERATOR_PATHS = new Set(['/health', '/readiness', '/metrics', '/tls-check
 /** The homepage as Bee should be asked for it: an ENS name becomes its Swarm reference when the gateway resolves ENS. */
 async function resolveHomepage(homepage: string, ens: EnsOptions): Promise<string | null> {
   return ens.rpcUrl && ENS_NAME.test(homepage) ? resolveSwarmReference(ens.rpcUrl, homepage) : homepage
+}
+
+/**
+ * Reverse proxies commonly hold an idle upstream connection for 60 seconds, so the gateway keeps one
+ * open longer than that and never closes it under a request the proxy is sending. Node requires the
+ * headers timeout to exceed the keep-alive timeout.
+ */
+export const KEEP_ALIVE_TIMEOUT = Dates.seconds(65)
+export const HEADERS_TIMEOUT = Dates.seconds(66)
+
+export function applyConnectionTimeouts(server: Server) {
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT
+  server.headersTimeout = HEADERS_TIMEOUT
 }
 
 export function createApp(

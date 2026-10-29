@@ -8,7 +8,7 @@ import { AddressInfo } from 'node:net'
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test'
 import { AppConfig, getAppConfig, getNamesWithoutEth, redactAppConfig } from '../src/config'
 import * as Database from '../src/database/Database'
-import { createApp } from '../src/server'
+import { applyConnectionTimeouts, createApp } from '../src/server'
 import * as Feed from '../src/services/feed'
 import { PostageBatchDispenserService } from '../src/services/postage-batch-dispenser'
 import { encodeResolveContenthash } from '../src/services/universal-resolver'
@@ -160,6 +160,15 @@ describe('ENS_RPC_URL setting', () => {
   it('is read from the environment', () => {
     assert.equal(getAppConfig({ ENS_RPC_URL: 'https://rpc.example.com' }).ensRpcUrl, 'https://rpc.example.com')
     assert.equal(getAppConfig({}).ensRpcUrl, '')
+  })
+})
+
+describe('connection timeouts', () => {
+  it('keep an idle connection for 65 seconds and wait a little longer for headers', () => {
+    const server = http.createServer()
+    applyConnectionTimeouts(server)
+    assert.equal(server.keepAliveTimeout, 65_000)
+    assert.equal(server.headersTimeout, 66_000)
   })
 })
 

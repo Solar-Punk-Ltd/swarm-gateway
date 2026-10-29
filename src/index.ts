@@ -11,7 +11,7 @@ import {
 } from './config'
 import { logger, subscribeLogServerRequests } from './logger'
 import { runMigrations } from './migration'
-import { createApp } from './server'
+import { applyConnectionTimeouts, createApp } from './server'
 import { startFeedMonitor } from './services/feed-monitor'
 import { PostageBatchDispenserService } from './services/postage-batch-dispenser'
 import { setupSchema } from './setup'
@@ -54,6 +54,7 @@ async function main() {
     logger.info(`starting server at ${serverConfig.hostname}:${serverConfig.port}`)
   })
 
+  applyConnectionTimeouts(server)
   subscribeLogServerRequests(server)
 
   process.on('uncaughtException', err => {
