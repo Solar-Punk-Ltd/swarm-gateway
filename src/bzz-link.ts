@@ -3,6 +3,14 @@ import { Cache, Dates, Strings } from 'cafe-utility'
 import { isDatabaseConfigured } from './database/Database'
 import { Rewrites, RewritesRow } from './database/Rewrites'
 import { lookupSwarmReference } from './services/universal-resolver'
+import { SharedAnswers } from './shared-answers'
+
+const tlsChecks = new SharedAnswers<boolean>({
+  label: 'tls check',
+  freshFor: Dates.minutes(10),
+  staleFor: Dates.hours(24),
+  isGood: servable => servable,
+})
 
 export interface EnsOptions {
   /** Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself. */
@@ -29,7 +37,7 @@ export async function isServableSubdomain(
     return false
   }
   try {
-    return await Cache.get(`tls-check:${subdomain}`, Dates.minutes(10), async () => {
+    return await tlsChecks.get(subdomain, async () => {
       if (await Rewrites.getOneOrNull({ subdomain }).catch(() => null)) {
         return true
       }

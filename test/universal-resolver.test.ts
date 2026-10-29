@@ -1,10 +1,10 @@
 process.env.LOG_LEVEL = 'critical'
 
-import { Binary, Cache } from 'cafe-utility'
+import { Binary, Cache, Dates } from 'cafe-utility'
 import assert from 'node:assert/strict'
 import http, { Server } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { after, before, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test'
 import {
   decodeResolveContenthash,
   dnsEncode,
@@ -14,6 +14,7 @@ import {
   swarmReferenceFromContenthash,
   UNIVERSAL_RESOLVER_ADDRESS,
 } from '../src/services/universal-resolver'
+import { SharedAnswers } from '../src/shared-answers'
 import { encodeResolveAnswer, SOLARPUNKID } from './universal-resolver-fixtures'
 
 const SWARM_PREFIX = 'e40101fa011b20'
@@ -56,6 +57,7 @@ after(() => {
 beforeEach(() => {
   rpcCalls.length = 0
   Cache.clear()
+  SharedAnswers.forgetAll()
 })
 
 describe('ens encoding', () => {
@@ -156,5 +158,53 @@ describe('resolving a swarm reference', () => {
   it('answers null for a name that cannot be encoded, without calling the rpc', async () => {
     assert.equal(await resolveSwarmReference(rpcUrl, 'a..eth'), null)
     assert.equal(rpcCalls.length, 0)
+  })
+})
+
+describe('sharing and keeping swarm references', () => {
+  const reference = SOLARPUNKID.contenthash.slice(SWARM_PREFIX.length)
+
+  afterEach(() => {
+    mock.timers.reset()
+  })
+
+  it('makes one rpc call for concurrent lookups of a name', async () => {
+    rpcBody = { result: SOLARPUNKID.resolveAnswer }
+    const answers = await Promise.all(Array.from({ length: 5 }, () => resolveSwarmReference(rpcUrl, SOLARPUNKID.name)))
+    assert.deepEqual(answers, Array(5).fill(reference))
+    assert.equal(rpcCalls.length, 1)
+  })
+
+  it('serves the last good reference when a refresh fails', async () => {
+    mock.timers.enable({ apis: ['Date'], now: Date.now() })
+    rpcBody = { result: SOLARPUNKID.resolveAnswer }
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), reference)
+    mock.timers.tick(Dates.minutes(2))
+    rpcBody = 'http-error'
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), reference)
+    assert.equal(rpcCalls.length, 2)
+  })
+
+  it('stops serving the last good reference a day after it was read', async () => {
+    mock.timers.enable({ apis: ['Date'], now: Date.now() })
+    rpcBody = { result: SOLARPUNKID.resolveAnswer }
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), reference)
+    mock.timers.tick(Dates.hours(25))
+    rpcBody = 'http-error'
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), null)
+  })
+
+  it('serves a new reference once a refresh succeeds', async () => {
+    mock.timers.enable({ apis: ['Date'], now: Date.now() })
+    rpcBody = { result: SOLARPUNKID.resolveAnswer }
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), reference)
+    mock.timers.tick(Dates.minutes(2))
+    rpcBody = { result: encodeResolveAnswer(SWARM_PREFIX + 'b1'.repeat(32)) }
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), 'b1'.repeat(32))
+  })
+
+  it('answers null for a name never resolved while the rpc fails', async () => {
+    rpcBody = 'http-error'
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), null)
   })
 })

@@ -1,17 +1,18 @@
 process.env.LOG_LEVEL = 'critical'
 delete process.env.DATABASE_CONFIG
 
-import { Cache } from 'cafe-utility'
+import { Cache, Dates } from 'cafe-utility'
 import assert from 'node:assert/strict'
 import http, { Server } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { after, before, beforeEach, describe, it, mock } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test'
 import { AppConfig, getAppConfig } from '../src/config'
 import * as Database from '../src/database/Database'
 import { createApp } from '../src/server'
 import * as Feed from '../src/services/feed'
 import { PostageBatchDispenserService } from '../src/services/postage-batch-dispenser'
 import { encodeResolveContenthash } from '../src/services/universal-resolver'
+import { SharedAnswers } from '../src/shared-answers'
 import { StampManager } from '../src/stamp'
 import { encodeResolveAnswer } from './universal-resolver-fixtures'
 
@@ -33,11 +34,15 @@ const beeRequests: string[] = []
 const rpcNames: string[] = []
 const servers: Server[] = []
 let rpcFails = false
+let beeFails = false
 
 const bee = http.createServer((req, res) => {
   beeRequests.push(`${req.method} ${req.url}`)
   req.resume()
-  if (/^\/bzz\/[0-9a-f]{64}\/$/.test(req.url ?? '')) {
+  if (beeFails) {
+    res.writeHead(502)
+    res.end()
+  } else if (/^\/bzz\/(?:[0-9a-f]{64}|site\.eth)\/$/.test(req.url ?? '')) {
     res.writeHead(200, { 'content-type': 'text/html' })
     res.end('<!DOCTYPE html><h1>site</h1>')
   } else {
@@ -131,7 +136,13 @@ beforeEach(() => {
   beeRequests.length = 0
   rpcNames.length = 0
   rpcFails = false
+  beeFails = false
   Cache.clear()
+  SharedAnswers.forgetAll()
+})
+
+afterEach(() => {
+  mock.timers.reset()
 })
 
 describe('ENS_RPC_URL setting', () => {
@@ -197,6 +208,59 @@ describe('ens names resolved by the gateway', () => {
     assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 403)
     rpcFails = false
     assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
+  })
+})
+
+describe('ens answers under load and while the rpc fails', () => {
+  let port: number
+
+  before(async () => {
+    port = await startGateway()
+  })
+
+  it('makes one rpc call for concurrent requests to a name', async () => {
+    const statuses = await Promise.all(
+      Array.from({ length: 5 }, async () => (await request(port, '/', { host: 'site.gw.local' })).status),
+    )
+    assert.deepEqual(statuses, Array(5).fill(200))
+    assert.deepEqual(rpcNames, ['site.eth'])
+  })
+
+  it('makes one rpc call for concurrent tls checks of a name', async () => {
+    const statuses = await Promise.all(
+      Array.from({ length: 5 }, async () => (await request(port, '/tls-check?domain=site.gw.local')).status),
+    )
+    assert.deepEqual(statuses, Array(5).fill(200))
+    assert.deepEqual(rpcNames, ['site.eth'])
+  })
+
+  it('keeps serving a name the rpc resolved before when a refresh fails', async () => {
+    mock.timers.enable({ apis: ['Date'], now: Date.now() })
+    assert.equal((await request(port, '/', { host: 'site.gw.local' })).status, 200)
+    mock.timers.tick(Dates.minutes(11))
+    rpcFails = true
+    assert.equal((await request(port, '/', { host: 'site.gw.local' })).status, 200)
+    assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
+    assert.deepEqual(rpcNames, ['site.eth', 'site.eth'])
+  })
+
+  it('still answers 404 for a name never resolved while the rpc fails', async () => {
+    rpcFails = true
+    assert.equal((await request(port, '/', { host: 'home.gw.local' })).status, 404)
+    assert.equal((await request(port, '/tls-check?domain=home.gw.local')).status, 403)
+    assert.deepEqual(beeRequests, [])
+  })
+})
+
+describe('tls checks through Bee while Bee fails', () => {
+  it('keeps passing a name that passed before, and fails one never checked', async () => {
+    const port = await startGateway({ ensRpcUrl: '' })
+    mock.timers.enable({ apis: ['Date'], now: Date.now() })
+    assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
+    mock.timers.tick(Dates.minutes(11))
+    beeFails = true
+    assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
+    assert.equal((await request(port, '/tls-check?domain=home.gw.local')).status, 403)
   })
 })
 

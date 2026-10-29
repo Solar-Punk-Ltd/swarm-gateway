@@ -1,5 +1,6 @@
-import { Binary, Cache, Dates } from 'cafe-utility'
+import { Binary, Dates } from 'cafe-utility'
 import { logger } from '../logger'
+import { SharedAnswers } from '../shared-answers'
 
 /**
  * ENS Universal Resolver on Ethereum mainnet. It follows names that ENS migrated to ENSv2,
@@ -16,6 +17,7 @@ const MAX_LABEL_LENGTH = 255
 const ADDRESS_WORD_PADDING = 12
 const RPC_TIMEOUT = Dates.seconds(10)
 const CACHE_TTL = Dates.minutes(1)
+const STALE_LIMIT = Dates.hours(24)
 const EXECUTION_REVERTED = 3
 
 export interface ResolvedContenthash {
@@ -29,6 +31,13 @@ interface JsonRpcAnswer {
 }
 
 class RpcRevertError extends Error {}
+
+const swarmReferences = new SharedAnswers<string | null>({
+  label: 'ens contenthash',
+  freshFor: CACHE_TTL,
+  staleFor: STALE_LIMIT,
+  isGood: reference => reference !== null,
+})
 
 /** DNS wire format of a name as ENSIP-10 asks for it: length-prefixed labels, then a zero byte. */
 export function dnsEncode(name: string): Uint8Array {
@@ -101,10 +110,12 @@ export async function resolveSwarmReference(rpcUrl: string, name: string): Promi
 /**
  * Like resolveSwarmReference, but a failed lookup (the endpoint down, an RPC error, a malformed
  * answer) throws instead of answering null, so a caller can avoid caching it as "not found".
+ * Concurrent lookups of a name share one RPC call, and while lookups fail, the last reference the
+ * name resolved to is served for up to a day after it was read.
  */
 export async function lookupSwarmReference(rpcUrl: string, name: string): Promise<string | null> {
   const normalized = name.toLowerCase()
-  return Cache.get(`ens-contenthash:${normalized}`, CACHE_TTL, async () => {
+  return swarmReferences.get(normalized, async () => {
     const answer = await callUniversalResolver(rpcUrl, normalized)
     return answer ? swarmReferenceFromContenthash(decodeResolveContenthash(answer).contenthash) : null
   })

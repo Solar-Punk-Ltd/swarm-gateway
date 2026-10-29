@@ -57,8 +57,11 @@ contenthash, accepts only a Swarm reference, caches the answer for a minute, and
 reference instead of the name. This applies to ENS paths (`/bzz/<name>.eth/`), ENS subdomains, the
 TLS check, the moderation rules and an ENS `HOMEPAGE`. A request through a name still falls under
 the default ENS rule, and a rule on the resolved reference still applies to it. A name with no
-Swarm contenthash, or one the endpoint cannot resolve, answers 404. When `ENS_RPC_URL` is unset,
-the gateway hands names to Bee as before.
+Swarm contenthash answers 404. Concurrent requests for a name share one call to the endpoint. When
+the endpoint fails, a name it resolved before keeps being served from its last reference for up to
+24 hours after that reference was read, and each such answer is logged. A name it never resolved
+answers 404. The TLS check keeps a name that passed it the same way, through Bee too. When
+`ENS_RPC_URL` is unset, the gateway hands names to Bee as before.
 
 To check names against the real resolver, run `npm run build`, then
 `ENS_RPC_URL=<url> node scripts/ens-live-check.mjs <name>.eth`.
