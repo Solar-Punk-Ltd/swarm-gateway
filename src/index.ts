@@ -3,13 +3,15 @@ import { Cache, Dates, Types } from 'cafe-utility'
 import {
   EnvironmentVariables,
   getAppConfig,
+  getNamesWithoutEth,
   getPostageBatchDispenserConfig,
   getServerConfig,
   getStampConfig,
+  redactAppConfig,
 } from './config'
 import { logger, subscribeLogServerRequests } from './logger'
 import { runMigrations } from './migration'
-import { createApp } from './server'
+import { applyConnectionTimeouts, createApp } from './server'
 import { startFeedMonitor } from './services/feed-monitor'
 import { PostageBatchDispenserService } from './services/postage-batch-dispenser'
 import { setupSchema } from './setup'
@@ -20,9 +22,14 @@ async function main() {
   const appConfig = getAppConfig(process.env as EnvironmentVariables)
   const serverConfig = getServerConfig(process.env as EnvironmentVariables)
 
-  logger.debug('proxy config', appConfig)
+  logger.debug('proxy config', redactAppConfig(appConfig))
   logger.debug('server config', serverConfig)
   logger.debug('stamp config', stampConfig)
+
+  const namesWithoutEth = getNamesWithoutEth(appConfig.allowedEnsNames ?? [])
+  if (namesWithoutEth.length) {
+    logger.warn(`ALLOWED_ENS_NAMES entries that do not end in .eth match no subdomain: ${namesWithoutEth.join(', ')}`)
+  }
 
   await setupSchema()
   await runMigrations()
@@ -47,6 +54,7 @@ async function main() {
     logger.info(`starting server at ${serverConfig.hostname}:${serverConfig.port}`)
   })
 
+  applyConnectionTimeouts(server)
   subscribeLogServerRequests(server)
 
   process.on('uncaughtException', err => {

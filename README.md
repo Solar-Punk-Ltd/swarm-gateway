@@ -45,6 +45,46 @@ When `HOSTNAME` is set, the gateway resolves subdomains against the Bee node:
 -   `<ens-name>.bzz.limo` — resolves the ENS name and serves the content
 -   Subdomain rewrites can be configured via the database
 
+## ENS names migrated to ENSv2
+
+ENS moved some names to ENSv2. In the old ENS registry such a name now has no resolver, and Bee
+resolves names through that registry, so Bee can no longer serve it. ENS's Universal Resolver
+still finds the name's records.
+
+Set `ENS_RPC_URL` to an Ethereum mainnet JSON-RPC endpoint (for example `https://rpc.example.com`)
+and the gateway resolves `.eth` names itself, through the Universal Resolver. It reads the name's
+contenthash, accepts only a Swarm reference, caches the answer for a minute, and asks Bee for the
+reference instead of the name. This applies to ENS paths (`/bzz/<name>.eth/`), ENS subdomains, the
+TLS check, the moderation rules and an ENS `HOMEPAGE`. A request through a name still falls under
+the default ENS rule, and a rule on the resolved reference still applies to it. A name with no
+Swarm contenthash answers 404. Concurrent requests for a name share one call to the endpoint. When
+the endpoint fails, a name it resolved before keeps being served from its last reference for up to
+24 hours after that reference was read, and each such answer is logged. A name it never resolved
+answers 404. The TLS check keeps a name that passed it the same way, through Bee too. When
+`ENS_RPC_URL` is unset, the gateway hands names to Bee as before.
+
+To check names against the real resolver, run `npm run build`, then
+`ENS_RPC_URL=<url> node scripts/ens-live-check.mjs <name>.eth`.
+
+## Serving only listed ENS names
+
+Set `ALLOWED_ENS_NAMES` to a space- or comma-separated list of `.eth` names, for example
+`ALLOWED_ENS_NAMES="site.eth, other.eth"`, and only those names are served as subdomains. Write each
+name with its `.eth` ending: an entry without it matches no subdomain, and the gateway logs a
+warning naming it at startup. Any other
+subdomain, a Swarm hash subdomain included, fails the TLS check and answers 404, so the server
+serves its own names and is not an open gateway. Subdomain rewrites from the database stay
+servable.
+
+While it is set, the listed names on their subdomains are all the gateway serves. Every other
+request answers 404 before it reaches Bee or the RPC endpoint: paths on the main hostname such as
+`/bzz/<name>.eth/`, `/bzz/<hash>/`, `/bytes/<hash>`, `/chunks/<hash>` and `/feeds/...`, uploads, the
+stamp listings under `/batches`, the moderation API, the homepage and the static pages, on any Host,
+an IP address included, and every request to a listed subdomain other than GET and HEAD. Four paths stay
+reachable on any Host for the operator: `/health`, `/readiness`, `/metrics`, and `/tls-check`,
+which a certificate for a listed subdomain is issued through. When it is unset, every subdomain and
+every path is served as before.
+
 ## Environment variables
 
 | Name                      | Default                   | Description                                                                             |
@@ -72,6 +112,8 @@ When `HOSTNAME` is set, the gateway resolves subdomains against the Bee node:
 | MATTERMOST_WEBHOOK_URL    | —                         | URL of the Mattermost incoming webhook used for alerts                                  |
 | MATTERMOST_STDOUT          | `false`                   | When `true`, log every Mattermost alert payload to stdout (whether or not a webhook is set). Useful for testing without a webhook |
 | READINESS_MODE            | `normal`                  | `normal`: check only Bee readiness, `strict`: check Bee readiness and Bee depth         |
+| ENS_RPC_URL               | unset                     | Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself through the ENS Universal Resolver |
+| ALLOWED_ENS_NAMES         | unset                     | Space- or comma-separated `.eth` names. When set, only these names are served, on their subdomains, and everything else but health, readiness, metrics and the TLS check answers 404 |
 
 ## Maintainers
 

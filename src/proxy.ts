@@ -1,13 +1,13 @@
 import { Reference } from '@ethersphere/bee-js'
 import { Binary, Cache, Dates, Objects, Strings, Types } from 'cafe-utility'
-import { Application, Request, Response } from 'express'
+import { Application, Request, RequestHandler, Response } from 'express'
 import { IncomingHttpHeaders } from 'http'
 import { pipeline as pipeStreams, Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { createGunzip, createInflate } from 'zlib'
-import { SUBDOMAIN, subdomainToBzz } from './bzz-link'
+import { EnsOptions, SUBDOMAIN, subdomainToBzz } from './bzz-link'
 import { AllowedUserAgents } from './database/AllowedUserAgents'
-import { getOnlyRowOrNull } from './database/Database'
+import { getOnlyRowOrNull, isDatabaseConfigured } from './database/Database'
 import { RulesRow } from './database/Rules'
 import { Settings, SettingsRow, SettingsRowId } from './database/Settings'
 import { TypeHints, TypeHintsRow } from './database/TypeHints'
@@ -15,6 +15,7 @@ import { logger } from './logger'
 import { getNotFoundPage } from './not-found'
 import { resolveEnsReferences } from './services/ens'
 import { POSTAGE_TOKEN_HEADER, PostageBatchDispenserService } from './services/postage-batch-dispenser'
+import { resolveSwarmReference } from './services/universal-resolver'
 import { StampManager } from './stamp'
 
 export const GET_PROXY_ENDPOINTS = ['/chunks/*path', '/bytes/*path', '/bzz/*path', '/feeds/*path']
@@ -71,7 +72,7 @@ const CORS_LIST_HEADERS = new Set([
   'access-control-expose-headers',
 ])
 
-interface Options {
+export interface ProxyOptions {
   beeApiUrl: string
   removePinHeader: boolean
   instanceName?: string | undefined
@@ -79,6 +80,7 @@ interface Options {
   postageBatchDispenser: PostageBatchDispenserService
   hostname?: string
   postSizeLimit: number
+  ens?: EnsOptions
 }
 
 export function hasDotSegment(path: string): boolean {
@@ -128,38 +130,35 @@ export function addRuleHashes(hashes: string[], hash: string): string[] {
   return hashes
 }
 
-export function createProxyEndpoints(app: Application, options: Options) {
-  app.use(async (req, res, next) => {
-    const subdomain = options.hostname && req.hostname ? Strings.before(req.hostname, options.hostname) : null
+const SUBDOMAIN_METHODS = new Set(['GET', 'HEAD'])
 
-    if (!options.hostname || !subdomain || req.method !== 'GET') {
-      next()
-      return
-    }
+/**
+ * Whether a request asks for content on a subdomain of the gateway's hostname, which only GET and HEAD
+ * may. Bee is asked with GET for both, and Node sends no body in answer to a HEAD.
+ */
+export function isSubdomainRequest(req: Request, hostname: string | undefined): boolean {
+  return Boolean(subdomainPart(req.hostname, hostname) && SUBDOMAIN_METHODS.has(req.method))
+}
 
-    if (!SUBDOMAIN.test(subdomain)) {
-      res.status(400).send({ error: 'bad host' })
-      return
-    }
+/**
+ * The labels a request's host has in front of the gateway's hostname, with their trailing dot, such as `site.`
+ * for `site.gw.example`. Host names are matched without regard to case, and only a host that ends in a dot and the
+ * hostname counts, so `site.gw.examplex` or `site.gw.example.other.com` is no subdomain at all.
+ */
+export function subdomainPart(requestHost: string | undefined, hostname: string | undefined): string | null {
+  if (!requestHost || !hostname) {
+    return null
+  }
+  const host = requestHost.toLowerCase().replace(/\.$/, '')
+  const suffix = `.${hostname.toLowerCase()}`
+  if (!host.endsWith(suffix) || host.length === suffix.length) {
+    return null
+  }
+  return host.slice(0, host.length - suffix.length + 1)
+}
 
-    try {
-      const newUrl = await subdomainToBzz(
-        subdomain.slice(0, -1), // remove trailing dot
-      )
-      await fetchAndRespond(
-        'GET',
-        Strings.joinUrl(['bzz', newUrl, req.path]),
-        req.query,
-        req.headers,
-        null,
-        res,
-        options,
-      )
-    } catch (error) {
-      logger.error('proxy failed', error)
-      res.sendStatus(500)
-    }
-  })
+export function createProxyEndpoints(app: Application, options: ProxyOptions) {
+  app.use(createSubdomainHandler(options))
   app.get(GET_PROXY_ENDPOINTS, async (req, res) => {
     if (req.path.includes(BAD_PATH)) {
       res.status(400)
@@ -182,6 +181,45 @@ export function createProxyEndpoints(app: Application, options: Options) {
     }
     await fetchAndRespond('POST', req.path, req.query, req.headers, body, res, options)
   })
+}
+
+/** Serves a subdomain request from the content its subdomain stands for, and hands every other request on. */
+export function createSubdomainHandler(options: ProxyOptions): RequestHandler {
+  return async (req, res, next) => {
+    if (!isSubdomainRequest(req, options.hostname)) {
+      next()
+      return
+    }
+    const subdomain = subdomainPart(req.hostname, options.hostname) ?? ''
+
+    if (!SUBDOMAIN.test(subdomain)) {
+      res.status(400).send({ error: 'bad host' })
+      return
+    }
+
+    try {
+      const newUrl = await subdomainToBzz(
+        subdomain.slice(0, -1), // remove trailing dot
+        options.ens,
+      )
+      if (newUrl === null) {
+        res.status(404).contentType('text/html').send(getNotFoundPage())
+        return
+      }
+      await fetchAndRespond(
+        'GET',
+        Strings.joinUrl(['bzz', newUrl, req.path]),
+        req.query,
+        req.headers,
+        null,
+        res,
+        options,
+      )
+    } catch (error) {
+      logger.error('proxy failed', error)
+      res.sendStatus(500)
+    }
+  }
 }
 
 function getUploadBody(req: Request, limit: number): AsyncIterable<Buffer> | null {
@@ -213,11 +251,18 @@ async function fetchAndRespond(
   headers: IncomingHttpHeaders,
   body: AsyncIterable<Buffer> | null,
   res: Response,
-  options: Options,
+  options: ProxyOptions,
 ) {
   const reference = getReferenceSegment(path)
   if (reference !== undefined && !isCanonicalReference(reference)) {
     res.status(400).send({ error: 'bad reference' })
+    return
+  }
+
+  const ensName = reference !== undefined && ENS_NAME.test(reference) ? reference : null
+  const beePath = ensName && options.ens?.rpcUrl ? await toBeePath(path, ensName, options.ens.rpcUrl) : path
+  if (beePath === null) {
+    res.status(404).contentType('text/html').send(getNotFoundPage())
     return
   }
 
@@ -254,12 +299,12 @@ async function fetchAndRespond(
       duplex: 'half',
       redirect: 'manual',
     }
-    response = await fetchBee(Strings.joinUrl([options.beeApiUrl, path]) + queryString, init)
+    response = await fetchBee(Strings.joinUrl([options.beeApiUrl, beePath]) + queryString, init)
 
     if (method === 'GET' && (response.status === 404 || (response.status >= 300 && response.status < 400))) {
-      const uglyUrls = [Strings.joinUrl([options.beeApiUrl, path, 'index.html']) + queryString]
-      if (!path.endsWith('/')) {
-        uglyUrls.push(Strings.joinUrl([options.beeApiUrl, path]) + '.html' + queryString)
+      const uglyUrls = [Strings.joinUrl([options.beeApiUrl, beePath, 'index.html']) + queryString]
+      if (!beePath.endsWith('/')) {
+        uglyUrls.push(Strings.joinUrl([options.beeApiUrl, beePath]) + '.html' + queryString)
       }
       for (const uglyUrl of uglyUrls) {
         const probeResponse = await fetchBee(uglyUrl, init)
@@ -325,7 +370,7 @@ async function fetchAndRespond(
       return row || DEFAULT_SETTINGS
     })
 
-    const isEns = reference !== undefined && ENS_NAME.test(reference)
+    const isEns = ensName !== null
 
     let allowed = typeLabel
       ? true
@@ -352,21 +397,7 @@ async function fetchAndRespond(
     }
 
     const hash = getRuleHash(reference ?? path)
-    const hashes: string[] = []
-    if (hash) {
-      addRuleHashes(hashes, hash)
-    }
-    if (isEns) {
-      for (const ensHash of await resolveEnsReferences(options.beeApiUrl, reference)) {
-        addRuleHashes(hashes, ensHash)
-      }
-    }
-    const rule = hashes.length
-      ? ((await getOnlyRowOrNull(
-          `SELECT hash, mode FROM rules WHERE hash IN (?) ORDER BY mode = 'deny' DESC LIMIT 1`,
-          hashes,
-        ).catch(() => null)) as Pick<RulesRow, 'hash' | 'mode'> | null)
-      : null
+    const rule = isDatabaseConfigured() ? await findRule(hash, ensName, options) : null
 
     if (rule) {
       if (rule.mode === 'deny') {
@@ -412,6 +443,12 @@ async function fetchAndRespond(
       res.set('content-type', 'text/html')
     }
     res.status(response.status)
+    // Bee is asked with GET for a HEAD too, so its body is let go here rather than read whole and thrown away.
+    if (res.req.method === 'HEAD') {
+      await response.body?.cancel()
+      res.end()
+      return
+    }
     if (head.byteLength) {
       res.write(head)
     }
@@ -435,6 +472,42 @@ async function fetchAndRespond(
       discard(response)
     }
   }
+}
+
+/** The moderation rule on a hash, or on what an ENS name stands for, with a deny winning over an allow. */
+async function findRule(
+  hash: string | null,
+  ensName: string | null,
+  options: ProxyOptions,
+): Promise<Pick<RulesRow, 'hash' | 'mode'> | null> {
+  const hashes: string[] = []
+  if (hash) {
+    addRuleHashes(hashes, hash)
+  }
+  if (ensName) {
+    for (const ensHash of await resolveEnsReferences(options.beeApiUrl, ensName, options.ens?.rpcUrl)) {
+      addRuleHashes(hashes, ensHash)
+    }
+  }
+  if (!hashes.length) {
+    return null
+  }
+  return (await getOnlyRowOrNull(
+    `SELECT hash, mode FROM rules WHERE hash IN (?) ORDER BY mode = 'deny' DESC LIMIT 1`,
+    hashes,
+  ).catch(() => null)) as Pick<RulesRow, 'hash' | 'mode'> | null
+}
+
+/**
+ * The path with its ENS name swapped for the Swarm reference the name resolves to, so Bee is asked by
+ * hash. Null when the name has no Swarm contenthash.
+ */
+async function toBeePath(path: string, ensName: string, rpcUrl: string): Promise<string | null> {
+  const swarmReference = await resolveSwarmReference(rpcUrl, ensName)
+  if (!swarmReference) {
+    return null
+  }
+  return path.replace(REFERENCE_SEGMENT, segment => segment.slice(0, -ensName.length) + swarmReference)
 }
 
 function mergeLists(current: string | undefined, addition: string): string {

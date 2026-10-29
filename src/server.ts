@@ -1,9 +1,10 @@
 import { Bee } from '@ethersphere/bee-js'
-import { Arrays, Numbers, Objects, Strings, Types } from 'cafe-utility'
+import { Arrays, Dates, Numbers, Objects, Strings, Types } from 'cafe-utility'
 import express, { Application, NextFunction, Request, Response } from 'express'
+import { Server } from 'http'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
-import { isServableSubdomain } from './bzz-link'
+import { EnsOptions, isServableSubdomain } from './bzz-link'
 import { checkChallenge, createChallenge } from './challenge'
 import { AppConfig, ReadinessMode } from './config'
 import { ApprovalRequests } from './database/ApprovalRequests'
@@ -12,11 +13,13 @@ import { Reports } from './database/Reports'
 import { Rules } from './database/Rules'
 import { logger } from './logger'
 import { METRICS_CONTENT_TYPE, renderMetrics } from './metrics'
-import { createProxyEndpoints, hasDotSegment } from './proxy'
+import { getNotFoundPage } from './not-found'
+import { createProxyEndpoints, createSubdomainHandler, hasDotSegment, isSubdomainRequest, ProxyOptions } from './proxy'
 import { checkReadiness } from './readiness'
 import { resolveFeed } from './services/feed'
 import { sendMattermostAlert } from './services/mattermost'
 import { PostageBatchDispenserService } from './services/postage-batch-dispenser'
+import { resolveSwarmReference } from './services/universal-resolver'
 import { StampManager } from './stamp'
 
 function handleErrors(handler: (req: Request, res: Response) => Promise<void>) {
@@ -32,6 +35,32 @@ function handleErrors(handler: (req: Request, res: Response) => Promise<void>) {
   }
 }
 
+const ENS_NAME = /\.eth$/i
+
+/**
+ * What stays reachable on any Host while ALLOWED_ENS_NAMES is set: liveness, readiness, metrics, and
+ * the TLS check, which a certificate for a listed name's subdomain is issued through.
+ */
+const OPERATOR_PATHS = new Set(['/health', '/readiness', '/metrics', '/tls-check'])
+
+/** The homepage as Bee should be asked for it: an ENS name becomes its Swarm reference when the gateway resolves ENS. */
+async function resolveHomepage(homepage: string, ens: EnsOptions): Promise<string | null> {
+  return ens.rpcUrl && ENS_NAME.test(homepage) ? resolveSwarmReference(ens.rpcUrl, homepage) : homepage
+}
+
+/**
+ * Reverse proxies commonly hold an idle upstream connection for 60 seconds, so the gateway keeps one
+ * open longer than that and never closes it under a request the proxy is sending. Node requires the
+ * headers timeout to exceed the keep-alive timeout.
+ */
+export const KEEP_ALIVE_TIMEOUT = Dates.seconds(65)
+export const HEADERS_TIMEOUT = Dates.seconds(66)
+
+export function applyConnectionTimeouts(server: Server) {
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT
+  server.headersTimeout = HEADERS_TIMEOUT
+}
+
 export function createApp(
   config: AppConfig,
   stampManager: StampManager,
@@ -39,6 +68,7 @@ export function createApp(
 ): Application {
   const bee = new Bee(config.beeApiUrl)
   const app = express()
+  const ens: EnsOptions = { rpcUrl: config.ensRpcUrl, allowedNames: config.allowedEnsNames }
 
   const postSizeLimit = Numbers.makeStorage(
     Arrays.getArgument(process.argv, 'post-size-limit', process.env, 'POST_SIZE_LIMIT') || '1gb',
@@ -90,7 +120,32 @@ export function createApp(
     })
   }
 
-  logger.info(`resolving .eth names and CIDs at *.${config.hostname}`)
+  const proxyOptions: ProxyOptions = {
+    beeApiUrl: config.beeApiUrl,
+    removePinHeader: config.removePinHeader ?? true,
+    stampManager,
+    postageBatchDispenser,
+    hostname: config.hostname,
+    instanceName: config.instanceName,
+    postSizeLimit,
+    ens,
+  }
+
+  if (ens.allowedNames?.length) {
+    const serveSubdomain = createSubdomainHandler(proxyOptions)
+    app.use((req, res, next) => {
+      if (OPERATOR_PATHS.has(req.path)) {
+        next()
+      } else if (isSubdomainRequest(req, config.hostname)) {
+        serveSubdomain(req, res, next)
+      } else {
+        res.status(404).contentType('text/html').send(getNotFoundPage())
+      }
+    })
+    logger.info(`serving only ${ens.allowedNames.join(', ')} at their subdomains of ${config.hostname}`)
+  } else {
+    logger.info(`resolving .eth names and CIDs at *.${config.hostname}`)
+  }
 
   app.get('/metrics', (_req, res) => {
     res.set('Content-Type', METRICS_CONTENT_TYPE)
@@ -111,7 +166,7 @@ export function createApp(
       }
       const suffix = `.${config.hostname}`
       const valid =
-        domain.endsWith(suffix) && (await isServableSubdomain(domain.slice(0, -suffix.length), config.beeApiUrl))
+        domain.endsWith(suffix) && (await isServableSubdomain(domain.slice(0, -suffix.length), config.beeApiUrl, ens))
       res.sendStatus(valid ? 200 : 403)
     })
   }
@@ -272,21 +327,18 @@ export function createApp(
     }),
   )
 
-  createProxyEndpoints(app, {
-    beeApiUrl: config.beeApiUrl,
-    removePinHeader: config.removePinHeader ?? true,
-    stampManager,
-    postageBatchDispenser,
-    hostname: config.hostname,
-    instanceName: config.instanceName,
-    postSizeLimit,
-  })
+  createProxyEndpoints(app, proxyOptions)
 
   if (config.homepage) {
     app.use(async (req, res, next) => {
       try {
+        const homepage = await resolveHomepage(config.homepage ?? '', ens)
+        if (!homepage) {
+          next()
+          return
+        }
         const url =
-          Strings.joinUrl([config.beeApiUrl, 'bzz', config.homepage, req.path]) + Objects.toQueryString(req.query, true)
+          Strings.joinUrl([config.beeApiUrl, 'bzz', homepage, req.path]) + Objects.toQueryString(req.query, true)
         logger.debug('attempting to fetch homepage', { url })
 
         const response = await fetch(url)

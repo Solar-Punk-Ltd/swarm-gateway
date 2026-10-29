@@ -191,6 +191,7 @@ function solveChallenge(nonce: string, difficulty: number): string {
 }
 
 before(async () => {
+  mock.method(Database, 'isDatabaseConfigured', () => true)
   mock.method(Database, 'getRows', async (query: string) =>
     query.includes('FROM allowedUserAgents') ? [{ userAgent: 'TrustedBot' }] : [],
   )

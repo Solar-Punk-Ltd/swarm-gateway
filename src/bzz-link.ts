@@ -2,25 +2,56 @@ import { Reference } from '@ethersphere/bee-js'
 import { Cache, Dates, Strings } from 'cafe-utility'
 import { isDatabaseConfigured } from './database/Database'
 import { Rewrites, RewritesRow } from './database/Rewrites'
+import { lookupSwarmReference } from './services/universal-resolver'
+import { SharedAnswers } from './shared-answers'
+
+const tlsChecks = new SharedAnswers<boolean>({
+  label: 'tls check',
+  freshFor: Dates.minutes(10),
+  staleFor: Dates.hours(24),
+  isGood: servable => servable,
+})
+
+export interface EnsOptions {
+  /** Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself. */
+  rpcUrl?: string | undefined
+  /** When not empty, the only `.eth` names the gateway serves, each on its own subdomain. Rewrites stay servable. */
+  allowedNames?: string[] | undefined
+}
+
+/** Whether a subdomain may be served under the allow list of ENS names. Every subdomain may when the list is empty. */
+export function isListedSubdomain(subdomain: string, ens: EnsOptions): boolean {
+  return !ens.allowedNames?.length || ens.allowedNames.includes(`${subdomain.toLowerCase()}.eth`)
+}
 
 export const SUBDOMAIN = /^[0-9a-z.-]+$/i
 
 export class NotEnabledError extends Error {}
 
-export async function isServableSubdomain(subdomain: string, beeApiUrl: string): Promise<boolean> {
+export async function isServableSubdomain(
+  subdomain: string,
+  beeApiUrl: string,
+  ens: EnsOptions = {},
+): Promise<boolean> {
   if (!SUBDOMAIN.test(subdomain)) {
     return false
   }
   try {
-    return await Cache.get(`tls-check:${subdomain}`, Dates.minutes(10), async () => {
+    return await tlsChecks.get(subdomain, async () => {
       if (await Rewrites.getOneOrNull({ subdomain }).catch(() => null)) {
         return true
+      }
+      if (!isListedSubdomain(subdomain, ens)) {
+        return false
       }
       try {
         new Reference(subdomain)
         return true
       } catch {
-        return resolvesOnBee(`${subdomain}.eth`, beeApiUrl)
+        const ensName = `${subdomain}.eth`
+        return ens.rpcUrl
+          ? (await lookupSwarmReference(ens.rpcUrl, ensName)) !== null
+          : resolvesOnBee(ensName, beeApiUrl)
       }
     })
   } catch {
@@ -41,13 +72,17 @@ async function resolvesOnBee(ensName: string, beeApiUrl: string): Promise<boolea
   return response.status < 400
 }
 
-export async function subdomainToBzz(subdomain: string): Promise<string> {
+/** The Bee reference a subdomain stands for, or null when the allow list of ENS names leaves it out. */
+export async function subdomainToBzz(subdomain: string, ens: EnsOptions = {}): Promise<string | null> {
   const rewrites = isDatabaseConfigured()
     ? await Cache.get<RewritesRow[]>('rewrites', Dates.minutes(1), () => Rewrites.getMany())
     : []
   const rewrite = rewrites.find(x => x.subdomain === subdomain)
   if (rewrite) {
     return rewrite.target
+  }
+  if (!isListedSubdomain(subdomain, ens)) {
+    return null
   }
   try {
     return new Reference(subdomain).toHex()

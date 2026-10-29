@@ -17,6 +17,8 @@ export interface AppConfig {
   homepage?: string | undefined
   mattermostWebhookUrl?: string
   mattermostStdout?: boolean
+  ensRpcUrl?: string | undefined
+  allowedEnsNames?: string[] | undefined
 }
 
 export interface ServerConfig {
@@ -77,6 +79,10 @@ export type EnvironmentVariables = Partial<{
 
   MATTERMOST_WEBHOOK_URL: string
   MATTERMOST_STDOUT: string
+
+  // ENS
+  ENS_RPC_URL: string
+  ALLOWED_ENS_NAMES: string
 }>
 
 export const SUPPORTED_LEVELS = ['critical', 'error', 'warn', 'info', 'verbose', 'debug'] as const
@@ -106,7 +112,36 @@ export function getAppConfig(env: EnvironmentVariables): AppConfig {
     mattermostWebhookUrl: env.MATTERMOST_WEBHOOK_URL || '',
     mattermostStdout: env.MATTERMOST_STDOUT === 'true',
     readinessMode: env.READINESS_MODE === ReadinessMode.Strict ? ReadinessMode.Strict : ReadinessMode.Normal,
+    ensRpcUrl: env.ENS_RPC_URL || '',
+    allowedEnsNames: parseEnsNames(env.ALLOWED_ENS_NAMES),
   }
+}
+
+const REDACTED = '[redacted]'
+const SECRET_APP_CONFIG_KEYS = ['authorization', 'moderationSecret', 'mattermostWebhookUrl', 'ensRpcUrl'] as const
+
+/** The app config with its secrets, and the URLs that can carry an API key or a token, hidden for a log line. */
+export function redactAppConfig(config: AppConfig): AppConfig {
+  const logged = { ...config }
+  for (const key of SECRET_APP_CONFIG_KEYS) {
+    if (logged[key]) {
+      logged[key] = REDACTED
+    }
+  }
+  return logged
+}
+
+/** A space- or comma-separated list of ENS names, lowercased. Empty when unset. */
+export function parseEnsNames(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(/[\s,]+/)
+    .map(x => x.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+/** The entries of an ALLOWED_ENS_NAMES list that do not end in `.eth`, which no subdomain can match. */
+export function getNamesWithoutEth(names: string[]): string[] {
+  return names.filter(name => !name.toLowerCase().endsWith('.eth'))
 }
 
 export function getServerConfig(env: EnvironmentVariables): ServerConfig {

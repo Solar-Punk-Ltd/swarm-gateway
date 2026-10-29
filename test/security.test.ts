@@ -301,6 +301,7 @@ describe('ens moderation', () => {
   let port: number
 
   before(async () => {
+    mock.method(Database, 'isDatabaseConfigured', () => true)
     mock.method(Database, 'getOnlyRowOrNull', async (_query: string, ...params: unknown[]) =>
       Array.isArray(params[0]) && params[0].includes(DENIED_HASH) ? { hash: DENIED_HASH, mode: 'deny' } : null,
     )
@@ -352,6 +353,7 @@ describe('non-canonical references', () => {
   const percentEncoded = DENIED_HASH.replace(/./g, x => `%${x.charCodeAt(0).toString(16)}`)
 
   before(async () => {
+    mock.method(Database, 'isDatabaseConfigured', () => true)
     mock.method(Database, 'getOnlyRowOrNull', async (_query: string, ...params: unknown[]) =>
       Array.isArray(params[0]) && params[0].includes(DENIED_HASH) ? { hash: DENIED_HASH, mode: 'deny' } : null,
     )
