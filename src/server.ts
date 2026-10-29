@@ -12,7 +12,8 @@ import { Reports } from './database/Reports'
 import { Rules } from './database/Rules'
 import { logger } from './logger'
 import { METRICS_CONTENT_TYPE, renderMetrics } from './metrics'
-import { createProxyEndpoints, hasDotSegment } from './proxy'
+import { getNotFoundPage } from './not-found'
+import { createProxyEndpoints, createSubdomainHandler, hasDotSegment, isSubdomainRequest, ProxyOptions } from './proxy'
 import { checkReadiness } from './readiness'
 import { resolveFeed } from './services/feed'
 import { sendMattermostAlert } from './services/mattermost'
@@ -34,6 +35,12 @@ function handleErrors(handler: (req: Request, res: Response) => Promise<void>) {
 }
 
 const ENS_NAME = /\.eth$/i
+
+/**
+ * What stays reachable on any Host while ALLOWED_ENS_NAMES is set: liveness, readiness, metrics, and
+ * the TLS check, which a certificate for a listed name's subdomain is issued through.
+ */
+const OPERATOR_PATHS = new Set(['/health', '/readiness', '/metrics', '/tls-check'])
 
 /** The homepage as Bee should be asked for it: an ENS name becomes its Swarm reference when the gateway resolves ENS. */
 async function resolveHomepage(homepage: string, ens: EnsOptions): Promise<string | null> {
@@ -99,7 +106,32 @@ export function createApp(
     })
   }
 
-  logger.info(`resolving .eth names and CIDs at *.${config.hostname}`)
+  const proxyOptions: ProxyOptions = {
+    beeApiUrl: config.beeApiUrl,
+    removePinHeader: config.removePinHeader ?? true,
+    stampManager,
+    postageBatchDispenser,
+    hostname: config.hostname,
+    instanceName: config.instanceName,
+    postSizeLimit,
+    ens,
+  }
+
+  if (ens.allowedNames?.length) {
+    const serveSubdomain = createSubdomainHandler(proxyOptions)
+    app.use((req, res, next) => {
+      if (OPERATOR_PATHS.has(req.path)) {
+        next()
+      } else if (isSubdomainRequest(req, config.hostname)) {
+        serveSubdomain(req, res, next)
+      } else {
+        res.status(404).contentType('text/html').send(getNotFoundPage())
+      }
+    })
+    logger.info(`serving only ${ens.allowedNames.join(', ')} at their subdomains of ${config.hostname}`)
+  } else {
+    logger.info(`resolving .eth names and CIDs at *.${config.hostname}`)
+  }
 
   app.get('/metrics', (_req, res) => {
     res.set('Content-Type', METRICS_CONTENT_TYPE)
@@ -281,16 +313,7 @@ export function createApp(
     }),
   )
 
-  createProxyEndpoints(app, {
-    beeApiUrl: config.beeApiUrl,
-    removePinHeader: config.removePinHeader ?? true,
-    stampManager,
-    postageBatchDispenser,
-    hostname: config.hostname,
-    instanceName: config.instanceName,
-    postSizeLimit,
-    ens,
-  })
+  createProxyEndpoints(app, proxyOptions)
 
   if (config.homepage) {
     app.use(async (req, res, next) => {

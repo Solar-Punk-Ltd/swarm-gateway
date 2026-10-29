@@ -95,14 +95,16 @@ function request(
   port: number,
   path: string,
   headers: http.OutgoingHttpHeaders = {},
+  method = 'GET',
+  body?: string,
 ): Promise<{ status: number; location: string | undefined }> {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path, headers }, res => {
+    const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
       res.resume()
       res.on('end', () => resolve({ status: res.statusCode ?? 0, location: res.headers.location }))
     })
     req.on('error', reject)
-    req.end()
+    req.end(body)
   })
 }
 
@@ -253,6 +255,67 @@ describe('serving only listed ens names', () => {
     assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
     assert.equal((await request(port, '/tls-check?domain=home.gw.local')).status, 403)
     assert.equal((await request(port, `/tls-check?domain=${SITE}.gw.local`)).status, 403)
+  })
+})
+
+describe('serving only listed ens names, away from their subdomains', () => {
+  let port: number
+
+  before(async () => {
+    port = await startGateway({ allowedEnsNames: ['site.eth'] })
+  })
+
+  const refused: [string, string, string, http.OutgoingHttpHeaders][] = [
+    ['an unlisted name on the main hostname', 'GET', '/bzz/home.eth/', { host: 'gw.local' }],
+    ['a listed name on the main hostname', 'GET', '/bzz/site.eth/', { host: 'gw.local' }],
+    ['a hash on the main hostname', 'GET', `/bzz/${SITE}/`, { host: 'gw.local' }],
+    ['bytes on the main hostname', 'GET', `/bytes/${SITE}`, { host: 'gw.local' }],
+    ['chunks on the main hostname', 'GET', `/chunks/${SITE}`, { host: 'gw.local' }],
+    ['feeds on the main hostname', 'GET', `/feeds/${'a5'.repeat(20)}/${'a6'.repeat(32)}`, { host: 'gw.local' }],
+    ['stamps on the main hostname', 'GET', '/batches', { host: 'gw.local' }],
+    ['an unlisted name on an IP host', 'GET', '/bzz/home.eth/', { host: '10.0.0.1' }],
+    ['a hash on an IP host', 'GET', `/bzz/${SITE}/`, { host: '10.0.0.1' }],
+    ['an upload on the main hostname', 'POST', '/bytes', { host: 'gw.local', 'content-type': 'text/plain' }],
+    ['an upload on an IP host', 'POST', '/bzz', { host: '10.0.0.1', 'content-type': 'text/plain' }],
+    ['an upload on a listed subdomain', 'POST', '/bytes', { host: 'site.gw.local', 'content-type': 'text/plain' }],
+  ]
+
+  for (const [label, method, path, headers] of refused) {
+    it(`answers 404 for ${label}, without asking Bee or the rpc`, async () => {
+      assert.equal((await request(port, path, headers, method, method === 'POST' ? 'hello' : undefined)).status, 404)
+      assert.deepEqual(beeRequests, [])
+      assert.deepEqual(rpcNames, [])
+    })
+  }
+
+  it('reads /batches on a listed subdomain from the site, never from the stamps of Bee', async () => {
+    await request(port, '/batches', { host: 'site.gw.local' })
+    assert.ok(beeRequests.length > 0)
+    assert.ok(
+      beeRequests.every(x => x.startsWith(`GET /bzz/${SITE}/batches`)),
+      beeRequests.join(', '),
+    )
+  })
+
+  it('still serves a listed name on its subdomain', async () => {
+    assert.equal((await request(port, '/', { host: 'site.gw.local' })).status, 200)
+    assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
+  })
+
+  it('still answers health and metrics on the main hostname', async () => {
+    assert.equal((await request(port, '/health', { host: 'gw.local' })).status, 200)
+    assert.equal((await request(port, '/metrics', { host: 'gw.local' })).status, 200)
+    assert.equal((await request(port, '/tls-check?domain=site.gw.local', { host: 'gw.local' })).status, 200)
+    assert.equal((await request(port, '/tls-check?domain=home.gw.local', { host: 'gw.local' })).status, 403)
+  })
+})
+
+describe('without ALLOWED_ENS_NAMES', () => {
+  it('serves the main hostname as before', async () => {
+    const port = await startGateway()
+    assert.equal((await request(port, '/bzz/site.eth/', { host: 'gw.local' })).status, 200)
+    assert.equal((await request(port, '/bzz/site.eth/', { host: '10.0.0.1' })).status, 200)
+    assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`, `GET /bzz/${SITE}/`])
   })
 })
 

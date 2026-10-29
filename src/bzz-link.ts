@@ -7,7 +7,7 @@ import { lookupSwarmReference } from './services/universal-resolver'
 export interface EnsOptions {
   /** Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself. */
   rpcUrl?: string | undefined
-  /** When not empty, the only `.eth` names served as subdomains. Rewrites stay servable. */
+  /** When not empty, the only `.eth` names the gateway serves, each on its own subdomain. Rewrites stay servable. */
   allowedNames?: string[] | undefined
 }
 

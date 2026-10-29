@@ -69,8 +69,16 @@ Set `ALLOWED_ENS_NAMES` to a space- or comma-separated list of `.eth` names, for
 `ALLOWED_ENS_NAMES="site.eth, other.eth"`, and only those names are served as subdomains. Any other
 subdomain, a Swarm hash subdomain included, fails the TLS check and answers 404, so the server
 serves its own names and is not an open gateway. Subdomain rewrites from the database stay
-servable. Paths on the main hostname, such as `/bzz/<hash>/`, are not affected. When it is unset,
-every subdomain is served as before.
+servable.
+
+While it is set, the listed names on their subdomains are all the gateway serves. Every other
+request answers 404 before it reaches Bee or the RPC endpoint: paths on the main hostname such as
+`/bzz/<name>.eth/`, `/bzz/<hash>/`, `/bytes/<hash>`, `/chunks/<hash>` and `/feeds/...`, uploads, the
+stamp listings under `/batches`, the moderation API, the homepage and the static pages, on any Host,
+an IP address included, and every request to a listed subdomain other than GET. Four paths stay
+reachable on any Host for the operator: `/health`, `/readiness`, `/metrics`, and `/tls-check`,
+which a certificate for a listed subdomain is issued through. When it is unset, every subdomain and
+every path is served as before.
 
 ## Environment variables
 
@@ -100,7 +108,7 @@ every subdomain is served as before.
 | MATTERMOST_STDOUT          | `false`                   | When `true`, log every Mattermost alert payload to stdout (whether or not a webhook is set). Useful for testing without a webhook |
 | READINESS_MODE            | `normal`                  | `normal`: check only Bee readiness, `strict`: check Bee readiness and Bee depth         |
 | ENS_RPC_URL               | unset                     | Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself through the ENS Universal Resolver |
-| ALLOWED_ENS_NAMES         | unset                     | Space- or comma-separated `.eth` names. When set, only these names are served as subdomains |
+| ALLOWED_ENS_NAMES         | unset                     | Space- or comma-separated `.eth` names. When set, only these names are served, on their subdomains, and everything else but health, readiness, metrics and the TLS check answers 404 |
 
 ## Maintainers
 

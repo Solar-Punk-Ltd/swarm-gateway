@@ -1,6 +1,6 @@
 import { Reference } from '@ethersphere/bee-js'
 import { Binary, Cache, Dates, Objects, Strings, Types } from 'cafe-utility'
-import { Application, Request, Response } from 'express'
+import { Application, Request, RequestHandler, Response } from 'express'
 import { IncomingHttpHeaders } from 'http'
 import { pipeline as pipeStreams, Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
@@ -72,7 +72,7 @@ const CORS_LIST_HEADERS = new Set([
   'access-control-expose-headers',
 ])
 
-interface Options {
+export interface ProxyOptions {
   beeApiUrl: string
   removePinHeader: boolean
   instanceName?: string | undefined
@@ -130,14 +130,45 @@ export function addRuleHashes(hashes: string[], hash: string): string[] {
   return hashes
 }
 
-export function createProxyEndpoints(app: Application, options: Options) {
-  app.use(async (req, res, next) => {
-    const subdomain = options.hostname && req.hostname ? Strings.before(req.hostname, options.hostname) : null
+/** Whether a request asks for content on a subdomain of the gateway's hostname, which only GET may. */
+export function isSubdomainRequest(req: Request, hostname: string | undefined): boolean {
+  return Boolean(hostname && req.hostname && Strings.before(req.hostname, hostname) && req.method === 'GET')
+}
 
-    if (!options.hostname || !subdomain || req.method !== 'GET') {
+export function createProxyEndpoints(app: Application, options: ProxyOptions) {
+  app.use(createSubdomainHandler(options))
+  app.get(GET_PROXY_ENDPOINTS, async (req, res) => {
+    if (req.path.includes(BAD_PATH)) {
+      res.status(400)
+      res.send({ error: 'bad path' })
+
+      return
+    }
+    await fetchAndRespond('GET', req.path, req.query, req.headers, null, res, options)
+  })
+
+  app.post(POST_PROXY_ENDPOINTS, async (req, res) => {
+    if (Number(req.headers['content-length']) > options.postSizeLimit) {
+      res.status(413).send({ error: 'payload too large' })
+      return
+    }
+    const body = getUploadBody(req, options.postSizeLimit)
+    if (!body) {
+      res.status(415).send({ error: 'unsupported content encoding' })
+      return
+    }
+    await fetchAndRespond('POST', req.path, req.query, req.headers, body, res, options)
+  })
+}
+
+/** Serves a subdomain request from the content its subdomain stands for, and hands every other request on. */
+export function createSubdomainHandler(options: ProxyOptions): RequestHandler {
+  return async (req, res, next) => {
+    if (!isSubdomainRequest(req, options.hostname)) {
       next()
       return
     }
+    const subdomain = Strings.before(req.hostname, options.hostname ?? '') ?? ''
 
     if (!SUBDOMAIN.test(subdomain)) {
       res.status(400).send({ error: 'bad host' })
@@ -166,29 +197,7 @@ export function createProxyEndpoints(app: Application, options: Options) {
       logger.error('proxy failed', error)
       res.sendStatus(500)
     }
-  })
-  app.get(GET_PROXY_ENDPOINTS, async (req, res) => {
-    if (req.path.includes(BAD_PATH)) {
-      res.status(400)
-      res.send({ error: 'bad path' })
-
-      return
-    }
-    await fetchAndRespond('GET', req.path, req.query, req.headers, null, res, options)
-  })
-
-  app.post(POST_PROXY_ENDPOINTS, async (req, res) => {
-    if (Number(req.headers['content-length']) > options.postSizeLimit) {
-      res.status(413).send({ error: 'payload too large' })
-      return
-    }
-    const body = getUploadBody(req, options.postSizeLimit)
-    if (!body) {
-      res.status(415).send({ error: 'unsupported content encoding' })
-      return
-    }
-    await fetchAndRespond('POST', req.path, req.query, req.headers, body, res, options)
-  })
+  }
 }
 
 function getUploadBody(req: Request, limit: number): AsyncIterable<Buffer> | null {
@@ -220,7 +229,7 @@ async function fetchAndRespond(
   headers: IncomingHttpHeaders,
   body: AsyncIterable<Buffer> | null,
   res: Response,
-  options: Options,
+  options: ProxyOptions,
 ) {
   const reference = getReferenceSegment(path)
   if (reference !== undefined && !isCanonicalReference(reference)) {
