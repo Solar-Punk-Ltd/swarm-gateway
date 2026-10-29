@@ -214,3 +214,54 @@ describe('without ENS_RPC_URL', () => {
     assert.deepEqual(rpcNames, [])
   })
 })
+
+describe('ALLOWED_ENS_NAMES setting', () => {
+  it('is read as a space- or comma-separated list', () => {
+    assert.deepEqual(getAppConfig({ ALLOWED_ENS_NAMES: ' Site.eth, home.eth  other.eth,' }).allowedEnsNames, [
+      'site.eth',
+      'home.eth',
+      'other.eth',
+    ])
+    assert.deepEqual(getAppConfig({}).allowedEnsNames, [])
+  })
+})
+
+describe('serving only listed ens names', () => {
+  let port: number
+
+  before(async () => {
+    port = await startGateway({ allowedEnsNames: ['site.eth', 'denied.eth'] })
+  })
+
+  it('serves a listed name by hash under the ens rule', async () => {
+    assert.equal((await request(port, '/', { host: 'Site.gw.local' })).status, 200)
+    assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
+  })
+
+  it('still applies moderation rules to a listed name', async () => {
+    assert.equal((await request(port, '/', { host: 'denied.gw.local' })).status, 302)
+  })
+
+  it('answers 404 for a subdomain that is not listed, without asking Bee or the rpc', async () => {
+    assert.equal((await request(port, '/', { host: 'home.gw.local' })).status, 404)
+    assert.equal((await request(port, '/', { host: `${SITE}.gw.local` })).status, 404)
+    assert.deepEqual(beeRequests, [])
+    assert.deepEqual(rpcNames, [])
+  })
+
+  it('fails the tls check for a subdomain that is not listed', async () => {
+    assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
+    assert.equal((await request(port, '/tls-check?domain=home.gw.local')).status, 403)
+    assert.equal((await request(port, `/tls-check?domain=${SITE}.gw.local`)).status, 403)
+  })
+})
+
+describe('serving listed ens names without ENS_RPC_URL', () => {
+  it('hands a listed name to Bee and refuses the rest', async () => {
+    const port = await startGateway({ ensRpcUrl: '', allowedEnsNames: ['site.eth'] })
+    await request(port, '/', { host: 'site.gw.local' })
+    assert.ok(beeRequests.includes('GET /bzz/site.eth/'), beeRequests.join(', '))
+    assert.equal((await request(port, '/', { host: 'home.gw.local' })).status, 404)
+    assert.ok(!beeRequests.includes('GET /bzz/home.eth/'), beeRequests.join(', '))
+  })
+})

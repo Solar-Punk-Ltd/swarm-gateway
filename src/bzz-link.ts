@@ -7,6 +7,13 @@ import { lookupSwarmReference } from './services/universal-resolver'
 export interface EnsOptions {
   /** Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself. */
   rpcUrl?: string | undefined
+  /** When not empty, the only `.eth` names served as subdomains. Rewrites stay servable. */
+  allowedNames?: string[] | undefined
+}
+
+/** Whether a subdomain may be served under the allow list of ENS names. Every subdomain may when the list is empty. */
+export function isListedSubdomain(subdomain: string, ens: EnsOptions): boolean {
+  return !ens.allowedNames?.length || ens.allowedNames.includes(`${subdomain.toLowerCase()}.eth`)
 }
 
 export const SUBDOMAIN = /^[0-9a-z.-]+$/i
@@ -25,6 +32,9 @@ export async function isServableSubdomain(
     return await Cache.get(`tls-check:${subdomain}`, Dates.minutes(10), async () => {
       if (await Rewrites.getOneOrNull({ subdomain }).catch(() => null)) {
         return true
+      }
+      if (!isListedSubdomain(subdomain, ens)) {
+        return false
       }
       try {
         new Reference(subdomain)
@@ -54,13 +64,17 @@ async function resolvesOnBee(ensName: string, beeApiUrl: string): Promise<boolea
   return response.status < 400
 }
 
-export async function subdomainToBzz(subdomain: string): Promise<string> {
+/** The Bee reference a subdomain stands for, or null when the allow list of ENS names leaves it out. */
+export async function subdomainToBzz(subdomain: string, ens: EnsOptions = {}): Promise<string | null> {
   const rewrites = isDatabaseConfigured()
     ? await Cache.get<RewritesRow[]>('rewrites', Dates.minutes(1), () => Rewrites.getMany())
     : []
   const rewrite = rewrites.find(x => x.subdomain === subdomain)
   if (rewrite) {
     return rewrite.target
+  }
+  if (!isListedSubdomain(subdomain, ens)) {
+    return null
   }
   try {
     return new Reference(subdomain).toHex()

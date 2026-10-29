@@ -18,6 +18,7 @@ export interface AppConfig {
   mattermostWebhookUrl?: string
   mattermostStdout?: boolean
   ensRpcUrl?: string | undefined
+  allowedEnsNames?: string[] | undefined
 }
 
 export interface ServerConfig {
@@ -81,6 +82,7 @@ export type EnvironmentVariables = Partial<{
 
   // ENS
   ENS_RPC_URL: string
+  ALLOWED_ENS_NAMES: string
 }>
 
 export const SUPPORTED_LEVELS = ['critical', 'error', 'warn', 'info', 'verbose', 'debug'] as const
@@ -111,7 +113,16 @@ export function getAppConfig(env: EnvironmentVariables): AppConfig {
     mattermostStdout: env.MATTERMOST_STDOUT === 'true',
     readinessMode: env.READINESS_MODE === ReadinessMode.Strict ? ReadinessMode.Strict : ReadinessMode.Normal,
     ensRpcUrl: env.ENS_RPC_URL || '',
+    allowedEnsNames: parseEnsNames(env.ALLOWED_ENS_NAMES),
   }
+}
+
+/** A space- or comma-separated list of ENS names, lowercased. Empty when unset. */
+export function parseEnsNames(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(/[\s,]+/)
+    .map(x => x.trim().toLowerCase())
+    .filter(Boolean)
 }
 
 export function getServerConfig(env: EnvironmentVariables): ServerConfig {

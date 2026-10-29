@@ -47,7 +47,7 @@ export function createApp(
 ): Application {
   const bee = new Bee(config.beeApiUrl)
   const app = express()
-  const ens: EnsOptions = { rpcUrl: config.ensRpcUrl }
+  const ens: EnsOptions = { rpcUrl: config.ensRpcUrl, allowedNames: config.allowedEnsNames }
 
   const postSizeLimit = Numbers.makeStorage(
     Arrays.getArgument(process.argv, 'post-size-limit', process.env, 'POST_SIZE_LIMIT') || '1gb',

@@ -147,7 +147,12 @@ export function createProxyEndpoints(app: Application, options: Options) {
     try {
       const newUrl = await subdomainToBzz(
         subdomain.slice(0, -1), // remove trailing dot
+        options.ens,
       )
+      if (newUrl === null) {
+        res.status(404).contentType('text/html').send(getNotFoundPage())
+        return
+      }
       await fetchAndRespond(
         'GET',
         Strings.joinUrl(['bzz', newUrl, req.path]),
