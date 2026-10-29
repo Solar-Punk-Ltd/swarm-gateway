@@ -125,6 +125,11 @@ export function parseEnsNames(value: string | undefined): string[] {
     .filter(Boolean)
 }
 
+/** The entries of an ALLOWED_ENS_NAMES list that do not end in `.eth`, which no subdomain can match. */
+export function getNamesWithoutEth(names: string[]): string[] {
+  return names.filter(name => !name.toLowerCase().endsWith('.eth'))
+}
+
 export function getServerConfig(env: EnvironmentVariables): ServerConfig {
   return { hostname: env.HOSTNAME || DEFAULT_HOSTNAME, port: Number(env.PORT || DEFAULT_PORT) }
 }

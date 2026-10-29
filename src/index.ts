@@ -3,6 +3,7 @@ import { Cache, Dates, Types } from 'cafe-utility'
 import {
   EnvironmentVariables,
   getAppConfig,
+  getNamesWithoutEth,
   getPostageBatchDispenserConfig,
   getServerConfig,
   getStampConfig,
@@ -23,6 +24,11 @@ async function main() {
   logger.debug('proxy config', appConfig)
   logger.debug('server config', serverConfig)
   logger.debug('stamp config', stampConfig)
+
+  const namesWithoutEth = getNamesWithoutEth(appConfig.allowedEnsNames ?? [])
+  if (namesWithoutEth.length) {
+    logger.warn(`ALLOWED_ENS_NAMES entries that do not end in .eth match no subdomain: ${namesWithoutEth.join(', ')}`)
+  }
 
   await setupSchema()
   await runMigrations()

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import http, { Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test'
-import { AppConfig, getAppConfig } from '../src/config'
+import { AppConfig, getAppConfig, getNamesWithoutEth } from '../src/config'
 import * as Database from '../src/database/Database'
 import { createApp } from '../src/server'
 import * as Feed from '../src/services/feed'
@@ -289,6 +289,11 @@ describe('ALLOWED_ENS_NAMES setting', () => {
       'other.eth',
     ])
     assert.deepEqual(getAppConfig({}).allowedEnsNames, [])
+  })
+
+  it('names the entries that do not end in .eth, which match no subdomain', () => {
+    assert.deepEqual(getNamesWithoutEth(['site.eth', 'site', 'site.com', 'Other.ETH']), ['site', 'site.com'])
+    assert.deepEqual(getNamesWithoutEth([]), [])
   })
 })
 

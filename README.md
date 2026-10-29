@@ -69,7 +69,9 @@ To check names against the real resolver, run `npm run build`, then
 ## Serving only listed ENS names
 
 Set `ALLOWED_ENS_NAMES` to a space- or comma-separated list of `.eth` names, for example
-`ALLOWED_ENS_NAMES="site.eth, other.eth"`, and only those names are served as subdomains. Any other
+`ALLOWED_ENS_NAMES="site.eth, other.eth"`, and only those names are served as subdomains. Write each
+name with its `.eth` ending: an entry without it matches no subdomain, and the gateway logs a
+warning naming it at startup. Any other
 subdomain, a Swarm hash subdomain included, fails the TLS check and answers 404, so the server
 serves its own names and is not an open gateway. Subdomain rewrites from the database stay
 servable.
