@@ -137,9 +137,24 @@ const SUBDOMAIN_METHODS = new Set(['GET', 'HEAD'])
  * may. Bee is asked with GET for both, and Node sends no body in answer to a HEAD.
  */
 export function isSubdomainRequest(req: Request, hostname: string | undefined): boolean {
-  return Boolean(
-    hostname && req.hostname && Strings.before(req.hostname, hostname) && SUBDOMAIN_METHODS.has(req.method),
-  )
+  return Boolean(subdomainPart(req.hostname, hostname) && SUBDOMAIN_METHODS.has(req.method))
+}
+
+/**
+ * The labels a request's host has in front of the gateway's hostname, with their trailing dot, such as `site.`
+ * for `site.gw.example`. Host names are matched without regard to case, and only a host that ends in a dot and the
+ * hostname counts, so `site.gw.examplex` or `site.gw.example.other.com` is no subdomain at all.
+ */
+export function subdomainPart(requestHost: string | undefined, hostname: string | undefined): string | null {
+  if (!requestHost || !hostname) {
+    return null
+  }
+  const host = requestHost.toLowerCase().replace(/\.$/, '')
+  const suffix = `.${hostname.toLowerCase()}`
+  if (!host.endsWith(suffix) || host.length === suffix.length) {
+    return null
+  }
+  return host.slice(0, host.length - suffix.length + 1)
 }
 
 export function createProxyEndpoints(app: Application, options: ProxyOptions) {
@@ -175,7 +190,7 @@ export function createSubdomainHandler(options: ProxyOptions): RequestHandler {
       next()
       return
     }
-    const subdomain = Strings.before(req.hostname, options.hostname ?? '') ?? ''
+    const subdomain = subdomainPart(req.hostname, options.hostname) ?? ''
 
     if (!SUBDOMAIN.test(subdomain)) {
       res.status(400).send({ error: 'bad host' })

@@ -404,6 +404,9 @@ describe('serving only listed ens names, away from their subdomains', () => {
     ['an upload on the main hostname', 'POST', '/bytes', { host: 'gw.local', 'content-type': 'text/plain' }],
     ['an upload on an IP host', 'POST', '/bzz', { host: '10.0.0.1', 'content-type': 'text/plain' }],
     ['an upload on a listed subdomain', 'POST', '/bytes', { host: 'site.gw.local', 'content-type': 'text/plain' }],
+    ['a host that runs past the hostname', 'GET', '/', { host: 'site.gw.localx' }],
+    ['a host that ends in the hostname without a dot before it', 'GET', '/', { host: 'sitexgw.local' }],
+    ['a host that carries the hostname in its middle', 'GET', '/', { host: 'site.gw.local.other.example' }],
   ]
 
   for (const [label, method, path, headers] of refused) {
@@ -425,6 +428,11 @@ describe('serving only listed ens names, away from their subdomains', () => {
 
   it('answers HEAD on a listed subdomain from the site', async () => {
     assert.equal((await request(port, '/', { host: 'site.gw.local' }, 'HEAD')).status, 200)
+    assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
+  })
+
+  it('serves a listed name whatever the case of its host', async () => {
+    assert.equal((await request(port, '/', { host: 'SITE.GW.LOCAL' })).status, 200)
     assert.deepEqual(beeRequests, [`GET /bzz/${SITE}/`])
   })
 
