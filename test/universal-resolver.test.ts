@@ -203,6 +203,18 @@ describe('sharing and keeping swarm references', () => {
     assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), 'b1'.repeat(32))
   })
 
+  it('does not bring back a contenthash that was cleared, when the rpc fails after the clear', async () => {
+    mock.timers.enable({ apis: ['Date'], now: Date.now() })
+    rpcBody = { result: SOLARPUNKID.resolveAnswer }
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), reference)
+    mock.timers.tick(Dates.minutes(2))
+    rpcBody = { result: encodeResolveAnswer('') }
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), null)
+    mock.timers.tick(Dates.minutes(2))
+    rpcBody = 'http-error'
+    assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), null)
+  })
+
   it('answers null for a name never resolved while the rpc fails', async () => {
     rpcBody = 'http-error'
     assert.equal(await resolveSwarmReference(rpcUrl, SOLARPUNKID.name), null)

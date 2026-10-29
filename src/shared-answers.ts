@@ -63,8 +63,12 @@ export class SharedAnswers<T> {
       const now = Date.now()
       this.sweep(now)
       this.fresh.set(key, { value, at: now })
+      // An answer that is not good, such as a contenthash cleared on chain, replaces the last good one, so an outage
+      // after it cannot bring back what was cleared.
       if (this.options.isGood(value)) {
         this.good.set(key, { value, at: now })
+      } else {
+        this.good.delete(key)
       }
       return value
     } catch (error) {
