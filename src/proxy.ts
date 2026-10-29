@@ -5,7 +5,7 @@ import { IncomingHttpHeaders } from 'http'
 import { pipeline as pipeStreams, Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { createGunzip, createInflate } from 'zlib'
-import { SUBDOMAIN, subdomainToBzz } from './bzz-link'
+import { EnsOptions, SUBDOMAIN, subdomainToBzz } from './bzz-link'
 import { AllowedUserAgents } from './database/AllowedUserAgents'
 import { getOnlyRowOrNull } from './database/Database'
 import { RulesRow } from './database/Rules'
@@ -15,6 +15,7 @@ import { logger } from './logger'
 import { getNotFoundPage } from './not-found'
 import { resolveEnsReferences } from './services/ens'
 import { POSTAGE_TOKEN_HEADER, PostageBatchDispenserService } from './services/postage-batch-dispenser'
+import { resolveSwarmReference } from './services/universal-resolver'
 import { StampManager } from './stamp'
 
 export const GET_PROXY_ENDPOINTS = ['/chunks/*path', '/bytes/*path', '/bzz/*path', '/feeds/*path']
@@ -79,6 +80,7 @@ interface Options {
   postageBatchDispenser: PostageBatchDispenserService
   hostname?: string
   postSizeLimit: number
+  ens?: EnsOptions
 }
 
 export function hasDotSegment(path: string): boolean {
@@ -221,6 +223,13 @@ async function fetchAndRespond(
     return
   }
 
+  const ensName = reference !== undefined && ENS_NAME.test(reference) ? reference : null
+  const beePath = ensName && options.ens?.rpcUrl ? await toBeePath(path, ensName, options.ens.rpcUrl) : path
+  if (beePath === null) {
+    res.status(404).contentType('text/html').send(getNotFoundPage())
+    return
+  }
+
   if (options.removePinHeader) {
     delete headers[SWARM_PIN_HEADER]
   }
@@ -254,12 +263,12 @@ async function fetchAndRespond(
       duplex: 'half',
       redirect: 'manual',
     }
-    response = await fetchBee(Strings.joinUrl([options.beeApiUrl, path]) + queryString, init)
+    response = await fetchBee(Strings.joinUrl([options.beeApiUrl, beePath]) + queryString, init)
 
     if (method === 'GET' && (response.status === 404 || (response.status >= 300 && response.status < 400))) {
-      const uglyUrls = [Strings.joinUrl([options.beeApiUrl, path, 'index.html']) + queryString]
-      if (!path.endsWith('/')) {
-        uglyUrls.push(Strings.joinUrl([options.beeApiUrl, path]) + '.html' + queryString)
+      const uglyUrls = [Strings.joinUrl([options.beeApiUrl, beePath, 'index.html']) + queryString]
+      if (!beePath.endsWith('/')) {
+        uglyUrls.push(Strings.joinUrl([options.beeApiUrl, beePath]) + '.html' + queryString)
       }
       for (const uglyUrl of uglyUrls) {
         const probeResponse = await fetchBee(uglyUrl, init)
@@ -325,7 +334,7 @@ async function fetchAndRespond(
       return row || DEFAULT_SETTINGS
     })
 
-    const isEns = reference !== undefined && ENS_NAME.test(reference)
+    const isEns = ensName !== null
 
     let allowed = typeLabel
       ? true
@@ -356,8 +365,8 @@ async function fetchAndRespond(
     if (hash) {
       addRuleHashes(hashes, hash)
     }
-    if (isEns) {
-      for (const ensHash of await resolveEnsReferences(options.beeApiUrl, reference)) {
+    if (ensName) {
+      for (const ensHash of await resolveEnsReferences(options.beeApiUrl, ensName, options.ens?.rpcUrl)) {
         addRuleHashes(hashes, ensHash)
       }
     }
@@ -435,6 +444,18 @@ async function fetchAndRespond(
       discard(response)
     }
   }
+}
+
+/**
+ * The path with its ENS name swapped for the Swarm reference the name resolves to, so Bee is asked by
+ * hash. Null when the name has no Swarm contenthash.
+ */
+async function toBeePath(path: string, ensName: string, rpcUrl: string): Promise<string | null> {
+  const swarmReference = await resolveSwarmReference(rpcUrl, ensName)
+  if (!swarmReference) {
+    return null
+  }
+  return path.replace(REFERENCE_SEGMENT, segment => segment.slice(0, -ensName.length) + swarmReference)
 }
 
 function mergeLists(current: string | undefined, addition: string): string {

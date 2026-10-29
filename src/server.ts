@@ -3,7 +3,7 @@ import { Arrays, Numbers, Objects, Strings, Types } from 'cafe-utility'
 import express, { Application, NextFunction, Request, Response } from 'express'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
-import { isServableSubdomain } from './bzz-link'
+import { EnsOptions, isServableSubdomain } from './bzz-link'
 import { checkChallenge, createChallenge } from './challenge'
 import { AppConfig, ReadinessMode } from './config'
 import { ApprovalRequests } from './database/ApprovalRequests'
@@ -17,6 +17,7 @@ import { checkReadiness } from './readiness'
 import { resolveFeed } from './services/feed'
 import { sendMattermostAlert } from './services/mattermost'
 import { PostageBatchDispenserService } from './services/postage-batch-dispenser'
+import { resolveSwarmReference } from './services/universal-resolver'
 import { StampManager } from './stamp'
 
 function handleErrors(handler: (req: Request, res: Response) => Promise<void>) {
@@ -32,6 +33,13 @@ function handleErrors(handler: (req: Request, res: Response) => Promise<void>) {
   }
 }
 
+const ENS_NAME = /\.eth$/i
+
+/** The homepage as Bee should be asked for it: an ENS name becomes its Swarm reference when the gateway resolves ENS. */
+async function resolveHomepage(homepage: string, ens: EnsOptions): Promise<string | null> {
+  return ens.rpcUrl && ENS_NAME.test(homepage) ? resolveSwarmReference(ens.rpcUrl, homepage) : homepage
+}
+
 export function createApp(
   config: AppConfig,
   stampManager: StampManager,
@@ -39,6 +47,7 @@ export function createApp(
 ): Application {
   const bee = new Bee(config.beeApiUrl)
   const app = express()
+  const ens: EnsOptions = { rpcUrl: config.ensRpcUrl }
 
   const postSizeLimit = Numbers.makeStorage(
     Arrays.getArgument(process.argv, 'post-size-limit', process.env, 'POST_SIZE_LIMIT') || '1gb',
@@ -111,7 +120,7 @@ export function createApp(
       }
       const suffix = `.${config.hostname}`
       const valid =
-        domain.endsWith(suffix) && (await isServableSubdomain(domain.slice(0, -suffix.length), config.beeApiUrl))
+        domain.endsWith(suffix) && (await isServableSubdomain(domain.slice(0, -suffix.length), config.beeApiUrl, ens))
       res.sendStatus(valid ? 200 : 403)
     })
   }
@@ -280,13 +289,19 @@ export function createApp(
     hostname: config.hostname,
     instanceName: config.instanceName,
     postSizeLimit,
+    ens,
   })
 
   if (config.homepage) {
     app.use(async (req, res, next) => {
       try {
+        const homepage = await resolveHomepage(config.homepage ?? '', ens)
+        if (!homepage) {
+          next()
+          return
+        }
         const url =
-          Strings.joinUrl([config.beeApiUrl, 'bzz', config.homepage, req.path]) + Objects.toQueryString(req.query, true)
+          Strings.joinUrl([config.beeApiUrl, 'bzz', homepage, req.path]) + Objects.toQueryString(req.query, true)
         logger.debug('attempting to fetch homepage', { url })
 
         const response = await fetch(url)

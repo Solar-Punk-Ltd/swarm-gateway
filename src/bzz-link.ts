@@ -2,12 +2,22 @@ import { Reference } from '@ethersphere/bee-js'
 import { Cache, Dates, Strings } from 'cafe-utility'
 import { isDatabaseConfigured } from './database/Database'
 import { Rewrites, RewritesRow } from './database/Rewrites'
+import { lookupSwarmReference } from './services/universal-resolver'
+
+export interface EnsOptions {
+  /** Ethereum mainnet JSON-RPC endpoint. When set, the gateway resolves `.eth` names itself. */
+  rpcUrl?: string | undefined
+}
 
 export const SUBDOMAIN = /^[0-9a-z.-]+$/i
 
 export class NotEnabledError extends Error {}
 
-export async function isServableSubdomain(subdomain: string, beeApiUrl: string): Promise<boolean> {
+export async function isServableSubdomain(
+  subdomain: string,
+  beeApiUrl: string,
+  ens: EnsOptions = {},
+): Promise<boolean> {
   if (!SUBDOMAIN.test(subdomain)) {
     return false
   }
@@ -20,7 +30,10 @@ export async function isServableSubdomain(subdomain: string, beeApiUrl: string):
         new Reference(subdomain)
         return true
       } catch {
-        return resolvesOnBee(`${subdomain}.eth`, beeApiUrl)
+        const ensName = `${subdomain}.eth`
+        return ens.rpcUrl
+          ? (await lookupSwarmReference(ens.rpcUrl, ensName)) !== null
+          : resolvesOnBee(ensName, beeApiUrl)
       }
     })
   } catch {

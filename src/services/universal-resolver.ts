@@ -90,16 +90,24 @@ export function swarmReferenceFromContenthash(contenthash: Uint8Array): string |
  * Null when the name has no Swarm contenthash or the lookup fails. Never throws.
  */
 export async function resolveSwarmReference(rpcUrl: string, name: string): Promise<string | null> {
-  const normalized = name.toLowerCase()
   try {
-    return await Cache.get(`ens-contenthash:${normalized}`, CACHE_TTL, async () => {
-      const answer = await callUniversalResolver(rpcUrl, normalized)
-      return answer ? swarmReferenceFromContenthash(decodeResolveContenthash(answer).contenthash) : null
-    })
+    return await lookupSwarmReference(rpcUrl, name)
   } catch (error) {
-    logger.warn('ens contenthash lookup failed', { name: normalized, error })
+    logger.warn('ens contenthash lookup failed', { name, error })
     return null
   }
+}
+
+/**
+ * Like resolveSwarmReference, but a failed lookup (the endpoint down, an RPC error, a malformed
+ * answer) throws instead of answering null, so a caller can avoid caching it as "not found".
+ */
+export async function lookupSwarmReference(rpcUrl: string, name: string): Promise<string | null> {
+  const normalized = name.toLowerCase()
+  return Cache.get(`ens-contenthash:${normalized}`, CACHE_TTL, async () => {
+    const answer = await callUniversalResolver(rpcUrl, normalized)
+    return answer ? swarmReferenceFromContenthash(decodeResolveContenthash(answer).contenthash) : null
+  })
 }
 
 async function callUniversalResolver(rpcUrl: string, name: string): Promise<string | null> {
