@@ -7,7 +7,7 @@ import { pipeline } from 'stream/promises'
 import { createGunzip, createInflate } from 'zlib'
 import { EnsOptions, SUBDOMAIN, subdomainToBzz } from './bzz-link'
 import { AllowedUserAgents } from './database/AllowedUserAgents'
-import { getOnlyRowOrNull } from './database/Database'
+import { getOnlyRowOrNull, isDatabaseConfigured } from './database/Database'
 import { RulesRow } from './database/Rules'
 import { Settings, SettingsRow, SettingsRowId } from './database/Settings'
 import { TypeHints, TypeHintsRow } from './database/TypeHints'
@@ -382,21 +382,7 @@ async function fetchAndRespond(
     }
 
     const hash = getRuleHash(reference ?? path)
-    const hashes: string[] = []
-    if (hash) {
-      addRuleHashes(hashes, hash)
-    }
-    if (ensName) {
-      for (const ensHash of await resolveEnsReferences(options.beeApiUrl, ensName, options.ens?.rpcUrl)) {
-        addRuleHashes(hashes, ensHash)
-      }
-    }
-    const rule = hashes.length
-      ? ((await getOnlyRowOrNull(
-          `SELECT hash, mode FROM rules WHERE hash IN (?) ORDER BY mode = 'deny' DESC LIMIT 1`,
-          hashes,
-        ).catch(() => null)) as Pick<RulesRow, 'hash' | 'mode'> | null)
-      : null
+    const rule = isDatabaseConfigured() ? await findRule(hash, ensName, options) : null
 
     if (rule) {
       if (rule.mode === 'deny') {
@@ -465,6 +451,30 @@ async function fetchAndRespond(
       discard(response)
     }
   }
+}
+
+/** The moderation rule on a hash, or on what an ENS name stands for, with a deny winning over an allow. */
+async function findRule(
+  hash: string | null,
+  ensName: string | null,
+  options: ProxyOptions,
+): Promise<Pick<RulesRow, 'hash' | 'mode'> | null> {
+  const hashes: string[] = []
+  if (hash) {
+    addRuleHashes(hashes, hash)
+  }
+  if (ensName) {
+    for (const ensHash of await resolveEnsReferences(options.beeApiUrl, ensName, options.ens?.rpcUrl)) {
+      addRuleHashes(hashes, ensHash)
+    }
+  }
+  if (!hashes.length) {
+    return null
+  }
+  return (await getOnlyRowOrNull(
+    `SELECT hash, mode FROM rules WHERE hash IN (?) ORDER BY mode = 'deny' DESC LIMIT 1`,
+    hashes,
+  ).catch(() => null)) as Pick<RulesRow, 'hash' | 'mode'> | null
 }
 
 /**

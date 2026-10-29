@@ -35,6 +35,9 @@ const rpcNames: string[] = []
 const servers: Server[] = []
 let rpcFails = false
 let beeFails = false
+let databaseConfigured = true
+let ruleQueries = 0
+let feedLookups = 0
 
 const bee = http.createServer((req, res) => {
   beeRequests.push(`${req.method} ${req.url}`)
@@ -114,13 +117,18 @@ function request(
 }
 
 before(async () => {
+  mock.method(Database, 'isDatabaseConfigured', () => databaseConfigured)
   mock.method(Database, 'getRows', async () => [])
-  mock.method(Database, 'getOnlyRowOrNull', async (query: string, ...params: unknown[]) =>
-    query.includes('FROM rules') && Array.isArray(params[0]) && params[0].includes(DENIED)
+  mock.method(Database, 'getOnlyRowOrNull', async (query: string, ...params: unknown[]) => {
+    ruleQueries++
+    return query.includes('FROM rules') && Array.isArray(params[0]) && params[0].includes(DENIED)
       ? { hash: DENIED, mode: 'deny' }
-      : null,
-  )
-  mock.method(Feed, 'resolveFeed', async () => null)
+      : null
+  })
+  mock.method(Feed, 'resolveFeed', async () => {
+    feedLookups++
+    return null
+  })
   await listen(bee)
   await listen(rpc)
 })
@@ -137,6 +145,9 @@ beforeEach(() => {
   rpcNames.length = 0
   rpcFails = false
   beeFails = false
+  databaseConfigured = true
+  ruleQueries = 0
+  feedLookups = 0
   Cache.clear()
   SharedAnswers.forgetAll()
 })
@@ -266,6 +277,20 @@ describe('tls checks through Bee while Bee fails', () => {
     beeFails = true
     assert.equal((await request(port, '/tls-check?domain=site.gw.local')).status, 200)
     assert.equal((await request(port, '/tls-check?domain=home.gw.local')).status, 403)
+  })
+})
+
+describe('moderation rules without a database', () => {
+  it('are not looked up, and the default rules still decide', async () => {
+    databaseConfigured = false
+    const port = await startGateway()
+    assert.equal((await request(port, '/bzz/site.eth/')).status, 200)
+    assert.equal((await request(port, '/', { host: 'denied.gw.local' })).status, 200)
+    const response = await request(port, `/bzz/${SITE}/`)
+    assert.equal(response.status, 302)
+    assert.equal(response.location, `/forbidden?hash=${SITE}`)
+    assert.equal(ruleQueries, 0)
+    assert.equal(feedLookups, 0)
   })
 })
 
